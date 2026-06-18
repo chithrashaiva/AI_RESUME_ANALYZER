@@ -6,6 +6,7 @@ import {useNavigate} from "react-router";
 import {convertPdfToImage} from "~/lib/pdf2img";
 import {generateUUID} from "~/lib/utils";
 import {prepareInstructions} from "../../constants";
+import {generateMockFeedback} from "~/lib/aiMock";
 
 const Upload = () => {
     const { auth, isLoading, fs, ai, kv } = usePuterStore();
@@ -27,7 +28,12 @@ const Upload = () => {
 
         setStatusText('Converting to image...');
         const imageFile = await convertPdfToImage(file);
-        if(!imageFile.file) return setStatusText('Error: Failed to convert PDF to image');
+        if(!imageFile.file) {
+            const errorMsg = imageFile.error || 'Failed to convert PDF to image';
+            setStatusText(`Error: ${errorMsg}`);
+            console.error("PDF conversion failed:", imageFile.error);
+            return;
+        }
 
         setStatusText('Uploading the image...');
         const uploadedImage = await fs.upload([imageFile.file]);
@@ -46,17 +52,30 @@ const Upload = () => {
 
         setStatusText('Analyzing...');
 
-        const feedback = await ai.feedback(
-            uploadedFile.path,
-            prepareInstructions({ jobTitle, jobDescription })
-        )
-        if (!feedback) return setStatusText('Error: Failed to analyze resume');
+        // Try to use Puter AI, fallback to mock
+        let feedbackData;
+        try {
+            const feedback = await ai.feedback(
+                uploadedFile.path,
+                prepareInstructions({ jobTitle, jobDescription })
+            );
+            
+            if (feedback) {
+                const feedbackText = typeof feedback.message.content === 'string'
+                    ? feedback.message.content
+                    : feedback.message.content[0].text;
+                feedbackData = JSON.parse(feedbackText);
+            } else {
+                throw new Error("No feedback received from AI");
+            }
+        } catch (error) {
+            console.warn("Puter AI failed, using mock feedback:", error);
+            feedbackData = await generateMockFeedback(jobTitle, jobDescription);
+        }
 
-        const feedbackText = typeof feedback.message.content === 'string'
-            ? feedback.message.content
-            : feedback.message.content[0].text;
+        if (!feedbackData) return setStatusText('Error: Failed to analyze resume');
 
-        data.feedback = JSON.parse(feedbackText);
+        data.feedback = feedbackData;
         await kv.set(`resume:${uuid}`, JSON.stringify(data));
         setStatusText('Analysis complete, redirecting...');
         console.log(data);
